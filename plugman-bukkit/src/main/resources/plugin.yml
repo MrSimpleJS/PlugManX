@@ -1,6 +1,6 @@
 name: PlugManX
 main: bukkit.com.rylinaux.plugman.PlugManBukkit
-version: ${plugman.version}
+version: ${version}
 description: Plugin manager for Bukkit servers
 authors: [ rylinaux, TestAccount666 ]
 api-version: 1.13

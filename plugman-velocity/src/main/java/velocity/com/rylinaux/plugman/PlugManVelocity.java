@@ -49,13 +49,8 @@ import java.nio.file.Path;
  *
  * @author rylinaux
  */
-@Plugin(
-        id = "plugmanvelocity",
-        name = "PlugManVelocity",
-        version = "3.0.5",
-        description = "Plugin manager for Velocity servers.",
-        authors = {"rylinaux", "TestAccount666"}
-)
+
+// We shouldn't need @Plugin this anymore as it's declared in the velocity-plugin.json
 public final class PlugManVelocity {
 
     @Getter
@@ -74,7 +69,7 @@ public final class PlugManVelocity {
 
     @Inject
     public PlugManVelocity(PluginContainer container, ProxyServer server, Logger logger, @DataDirectory Path dataDirectory) {
-        this.container = container
+        this.container = container;
         this.server = server;
         this.logger = logger;
         this.dataDirectory = dataDirectory;

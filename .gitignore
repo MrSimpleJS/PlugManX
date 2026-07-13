@@ -9,3 +9,9 @@ delete.bat
 /.paper-nms/*
 target/
 /plugman-velocity/temp/
+buiild
+/.gradle/
+/buildSrc/.gradle/
+/buildSrc/.kotlin/
+/buildSrc/build/
+/*/build/

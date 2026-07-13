@@ -1,0 +1,11 @@
+{
+  "id": "plugmanvelocity",
+  "name": "PlugManVelocity",
+  "version": "${version}",
+  "main": "velocity.com.rylinaux.plugman.PlugManVelocity",
+  "authors": [
+    "rylinaux",
+    "TestAccount666"
+  ],
+  "description": "Plugin manager for Velocity servers."
+}
