@@ -14,7 +14,7 @@ $env:JAVA_HOME = "C:\Program Files\Java\jdk-22"
 ```
 
 The assembled server plugin is written to
-`build/libs/PlugManX-<version>.jar`, for example `PlugManX-3.0.5.jar`.
+`build/libs/PlugManX-<version>.jar`, for example `PlugManX-3.1.0.jar`.
 
 ## Local Paper server
 
@@ -32,6 +32,6 @@ The current Velocity 4 snapshot requires a Java 25 compatible target, so this
 module uses the locally installed JDK 26 compiler with `--release 25`.
 
 The normal build also creates the standalone Velocity JAR at
-`plugman-velocity/build/libs/PlugManX-3.0.5.jar`. Shadow 8.3.10 is used because
+`plugman-velocity/build/libs/PlugManX-3.1.0.jar`. Shadow 8.3.10 is used because
 its bytecode tooling supports the Java 25/26 classes required by the current
 Velocity snapshot.
