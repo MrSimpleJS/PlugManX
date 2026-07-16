@@ -8,4 +8,7 @@ delete.bat
 .attach*
 /.paper-nms/*
 target/
+build/
+.gradle/
+run/
 /plugman-velocity/temp/
