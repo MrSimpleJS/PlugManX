@@ -13,7 +13,8 @@ $env:JAVA_HOME = "C:\Program Files\Java\jdk-22"
 .\gradlew.bat build
 ```
 
-The assembled server plugin is written to `build/libs/PlugManX.jar`.
+The assembled server plugin is written to
+`build/libs/PlugManX-<version>.jar`, for example `PlugManX-3.0.5.jar`.
 
 ## Local Paper server
 

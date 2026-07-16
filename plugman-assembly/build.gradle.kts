@@ -15,7 +15,7 @@ dependencies {
 }
 
 tasks.shadowJar {
-    archiveFileName.set("PlugManX.jar")
+    archiveFileName.set("PlugManX-${project.version}.jar")
     relocate("com.tcoded", "com.rylinaux.folia")
     relocate("com.fasterxml.jackson", "core.com.rylinaux.plugman.libs.jackson")
     relocate("org.yaml.snakeyaml", "core.com.rylinaux.plugman.libs.snakeyaml")
