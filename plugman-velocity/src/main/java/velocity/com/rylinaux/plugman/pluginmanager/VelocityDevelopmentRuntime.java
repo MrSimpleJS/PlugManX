@@ -39,7 +39,6 @@ import java.util.function.Consumer;
  */
 final class VelocityDevelopmentRuntime {
     private final String adapterName;
-    private final String compatibilityWarning;
     private final Constructor<?> loaderConstructor;
     private final Constructor<?> containerConstructor;
     private final Method loadCandidate;
@@ -58,11 +57,12 @@ final class VelocityDevelopmentRuntime {
     private final Field pluginClassLoaders;
     private final VelocityPacketRegistryCleaner packetRegistryCleaner;
     private final Map<ClassLoader, Set<ChannelIdentifier>> pluginChannelsByClassLoader = new ConcurrentHashMap<>();
+    private final Map<ClassLoader, VelocityPacketRegistryCleaner.RegistryDelta> pluginPacketDeltasByClassLoader =
+            new ConcurrentHashMap<>();
 
     private VelocityDevelopmentRuntime(VelocityRuntimeAdapters.Selection selection) throws ReflectiveOperationException {
         var adapter = selection.adapter();
         adapterName = adapter.name();
-        compatibilityWarning = selection.warning();
         var layout = adapter.reflectionLayout();
         var loaderClass = Class.forName(layout.javaPluginLoaderClass());
         var containerClass = Class.forName(layout.pluginContainerClass());
@@ -95,19 +95,33 @@ final class VelocityDevelopmentRuntime {
     }
 
     static VelocityDevelopmentRuntime detect() {
+        var version = PlugManVelocity.getInstance().getServer().getVersion().getVersion();
+        VelocityRuntimeAdapters.Selection selection;
         try {
-            var version = PlugManVelocity.getInstance().getServer().getVersion().getVersion();
-            var selection = VelocityRuntimeAdapters.find(version);
-            if (selection.warning() != null) {
-                PlugManVelocity.getInstance().getLogger().warn("{}", selection.warning());
-            }
-            return new VelocityDevelopmentRuntime(selection);
-        } catch (ReflectiveOperationException | RuntimeException | LinkageError exception) {
-            PlugManVelocity.getInstance().getLogger().warn(
-                    "Velocity development runtime is unavailable on this Velocity build: {}",
-                    exception.toString());
+            selection = VelocityRuntimeAdapters.find(version);
+        } catch (RuntimeException | LinkageError exception) {
+            logUnavailableRuntime(exception);
             return null;
         }
+
+        try {
+            return new VelocityDevelopmentRuntime(selection);
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError exception) {
+            if (selection.newerThanTested()) {
+                PlugManVelocity.getInstance().getLogger().warn(
+                        "Velocity {} is newer than the tested 4.1.0 runtime and its runtime capability checks failed. "
+                                + "Reload compatibility is unavailable on this build.",
+                        version);
+            }
+            logUnavailableRuntime(exception);
+            return null;
+        }
+    }
+
+    private static void logUnavailableRuntime(Throwable throwable) {
+        PlugManVelocity.getInstance().getLogger().warn(
+                "Velocity development runtime is unavailable on this Velocity build: {}",
+                throwable.toString());
     }
 
     static String cleanupFailureSummary(Throwable throwable) {
@@ -120,10 +134,6 @@ final class VelocityDevelopmentRuntime {
         return adapterName;
     }
 
-    String compatibilityWarning() {
-        return compatibilityWarning;
-    }
-
     PluginDescription readDescription(ProxyServer server, Path source) throws ReflectiveOperationException {
         var loader = loaderConstructor.newInstance(server, source.getParent());
         return (PluginDescription) loadCandidate.invoke(loader, source);
@@ -132,6 +142,7 @@ final class VelocityDevelopmentRuntime {
     PluginContainer load(ProxyServer server, Path source, Consumer<String> debug) throws ReflectiveOperationException {
         var startedAt = System.nanoTime();
         var channelsBeforeLoad = registeredChannels(server);
+        var packetRegistryBeforeLoad = snapshotPacketRegistry(debug, startedAt);
         var classLoadersBeforeLoad = registeredPluginClassLoaders();
         var loader = loaderConstructor.newInstance(server, source.getParent());
         debug(debug, startedAt, "Created JavaPluginLoader");
@@ -160,6 +171,7 @@ final class VelocityDevelopmentRuntime {
             var initializeHandlers = fireForPlugin(server.getEventManager(), container, new ProxyInitializeEvent());
             debug(debug, startedAt, "Ran " + initializeHandlers + " ProxyInitializeEvent handlers");
             trackPluginChannels(server, container, channelsBeforeLoad, debug, startedAt);
+            trackPluginPacketMappings(container, packetRegistryBeforeLoad, debug, startedAt);
             return container;
         } catch (ReflectiveOperationException | RuntimeException | LinkageError exception) {
             VelocityCleanupException rollbackFailure;
@@ -167,6 +179,7 @@ final class VelocityDevelopmentRuntime {
                 rollbackFailure = rollbackFailedCandidateLoad(classLoadersBeforeLoad, debug, startedAt);
             } else {
                 trackPluginChannels(server, container, channelsBeforeLoad, debug, startedAt);
+                trackPluginPacketMappings(container, packetRegistryBeforeLoad, debug, startedAt);
                 rollbackFailure = rollbackFailedLoad(
                         server, container, registered, classLoadersBeforeLoad, debug, startedAt);
             }
@@ -229,6 +242,7 @@ final class VelocityDevelopmentRuntime {
 
         if (classLoader != null) inspectLeaks(leakSnapshot, classLoader, debug, startedAt);
         pluginChannelsByClassLoader.remove(classLoader);
+        pluginPacketDeltasByClassLoader.remove(classLoader);
         if (!failures.isEmpty()) {
             throw new VelocityCleanupException(container.getDescription().getId(), failures);
         }
@@ -484,6 +498,7 @@ final class VelocityDevelopmentRuntime {
 
         if (classLoader != null) inspectLeaks(leakSnapshot, classLoader, debug, startedAt);
         if (classLoader != null) pluginChannelsByClassLoader.remove(classLoader);
+        if (classLoader != null) pluginPacketDeltasByClassLoader.remove(classLoader);
         if (failures.isEmpty()) return null;
 
         return new VelocityCleanupException(container.getDescription().getId(), failures);
@@ -555,14 +570,21 @@ final class VelocityDevelopmentRuntime {
         if (failure != null) throw failure;
     }
 
-    private VelocityPacketRegistryCleaner createPacketRegistryCleaner(VelocityRuntimeAdapter adapter) {
-        if (!adapter.supportsPacketRegistryCleanup()) return null;
+    private VelocityPacketRegistryCleaner createPacketRegistryCleaner(VelocityRuntimeAdapter adapter)
+            throws ReflectiveOperationException {
+        if (!adapter.supportsPacketRegistryCleanup()) {
+            throw new ReflectiveOperationException(
+                    adapter.name() + " does not provide packet registry cleanup");
+        }
+
         try {
-            return new VelocityPacketRegistryCleaner();
+            var cleaner = new VelocityPacketRegistryCleaner();
+            cleaner.validateRuntimeLayout();
+            return cleaner;
         } catch (ReflectiveOperationException | RuntimeException | LinkageError exception) {
-            PlugManVelocity.getInstance().getLogger().warn(
-                    "Velocity packet registry cleanup is unavailable: {}", exception.toString());
-            return null;
+            throw new ReflectiveOperationException(
+                    "Velocity packet registry cleanup capability check failed: " + exception,
+                    exception);
         }
     }
 
@@ -570,12 +592,48 @@ final class VelocityDevelopmentRuntime {
                                        Consumer<String> debug,
                                        long startedAt) throws ReflectiveOperationException {
         if (packetRegistryCleaner == null || classLoader == null) return;
-        var result = packetRegistryCleaner.removeOwnedMappings(classLoader);
-        debug(debug, startedAt, "Removed " + result.removedMappings()
-                + " classloader-owned packet mappings");
-        if (result.skippedMappings() > 0) {
-            throw new ReflectiveOperationException("Skipped " + result.skippedMappings()
+        var trackedDelta = pluginPacketDeltasByClassLoader.get(classLoader);
+        var trackedResult = trackedDelta == null
+                ? new VelocityPacketRegistryCleaner.CleanupResult(0, 0)
+                : packetRegistryCleaner.removeTrackedMappings(trackedDelta);
+        var fallbackResult = packetRegistryCleaner.removeOwnedMappings(classLoader);
+        pluginPacketDeltasByClassLoader.remove(classLoader);
+
+        debug(debug, startedAt, "Removed " + trackedResult.removedMappings()
+                + " tracked and " + fallbackResult.removedMappings()
+                + " fallback classloader-owned packet mappings");
+        if (fallbackResult.skippedMappings() > 0) {
+            throw new ReflectiveOperationException("Skipped " + fallbackResult.skippedMappings()
                     + " packet mappings because their class and supplier ownership did not match");
+        }
+    }
+
+    private VelocityPacketRegistryCleaner.RegistrySnapshot snapshotPacketRegistry(Consumer<String> debug,
+                                                                                    long startedAt) {
+        if (packetRegistryCleaner == null) return null;
+        try {
+            return packetRegistryCleaner.snapshot();
+        } catch (ReflectiveOperationException | RuntimeException exception) {
+            debug(debug, startedAt, "WARNING: packet registry snapshot failed: " + exception);
+            return null;
+        }
+    }
+
+    private void trackPluginPacketMappings(PluginContainer container,
+                                           VelocityPacketRegistryCleaner.RegistrySnapshot beforeLoad,
+                                           Consumer<String> debug,
+                                           long startedAt) {
+        if (packetRegistryCleaner == null || beforeLoad == null) return;
+        try {
+            var instance = container.getInstance().orElse(null);
+            if (instance == null) return;
+            var classLoader = instance.getClass().getClassLoader();
+            var delta = packetRegistryCleaner.addedMappings(beforeLoad, classLoader);
+            if (!delta.isEmpty()) pluginPacketDeltasByClassLoader.put(classLoader, delta);
+            debug(debug, startedAt, "Associated " + delta.size()
+                    + " new packet mappings with classloader " + describeClassLoader(classLoader));
+        } catch (ReflectiveOperationException | RuntimeException exception) {
+            debug(debug, startedAt, "WARNING: packet registry delta tracking failed: " + exception);
         }
     }
 
